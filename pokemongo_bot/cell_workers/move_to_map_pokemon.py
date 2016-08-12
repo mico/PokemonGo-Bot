@@ -30,13 +30,13 @@ class MoveToMapPokemon(BaseTask):
         try:
             req = requests.get('{}/raw_data?gyms=false&scanned=false'.format(self.config['address']))
         except requests.exceptions.ConnectionError:
-            logger.log('Could not reach PokemonGo-Map Server', 'red')
+            self.logger.info('Could not reach PokemonGo-Map Server')
             return []
 
         try:
             raw_data = req.json()
         except ValueError:
-            logger.log('Map data was not valid', 'red')
+            self.logger.info('Map data was not valid')
             return []
 
         pokemon_list = []
@@ -46,23 +46,22 @@ class MoveToMapPokemon(BaseTask):
             try:
                 pokemon['encounter_id'] = long(base64.b64decode(pokemon['encounter_id']))
             except TypeError:
-                log.logger('base64 error: {}'.format(pokemon['encounter_id']), 'red')
+                self.logger.info('base64 error: {}'.format(pokemon['encounter_id']))
                 continue
             pokemon['spawn_point_id'] = pokemon['spawnpoint_id']
             pokemon['disappear_time'] = int(pokemon['disappear_time'] / 1000)
             pokemon['name'] = self.pokemon_data[pokemon['pokemon_id'] - 1]['Name']
-            pokemon['is_vip'] = pokemon['name'] in self.bot.config.vips
+            pokemon['priority'] = self.config['catch'].get(pokemon['name'], 0)
+            pokemon['is_vip'] = pokemon['name'] in self.bot.config.vips or pokemon['priority'] > 800
 
             if pokemon['name'] not in self.config['catch'] and not pokemon['is_vip']:
                 continue
 
-            if pokemon['disappear_time'] < (now + self.config['min_time']):
+            if not pokemon['is_vip'] and pokemon['disappear_time'] < (now + self.config['min_time']):
                 continue
 
             if self.was_caught(pokemon):
                 continue
-
-            pokemon['priority'] = self.config['catch'].get(pokemon['name'], 0)
 
             pokemon['dist'] = distance(
                 self.bot.position[0],
@@ -71,7 +70,7 @@ class MoveToMapPokemon(BaseTask):
                 pokemon['longitude'],
             )
 
-            if pokemon['dist'] > self.config['max_distance'] and not self.config['snipe']:
+            if not pokemon['is_vip'] and pokemon['dist'] > self.config['max_distance'] and not self.config['snipe']:
                 continue
 
             pokemon_list.append(pokemon)
@@ -98,13 +97,13 @@ class MoveToMapPokemon(BaseTask):
         try:
             req = requests.get('{}/loc'.format(self.config['address']))
         except requests.exceptions.ConnectionError:
-            logger.log('Could not reach PokemonGo-Map Server', 'red')
+            self.logger.info('Could not reach PokemonGo-Map Server')
             return
 
         try:
             loc_json = req.json()
         except ValueError:
-            return log.logger('Map location data was not valid', 'red')
+            return self.logger.info('Map location data was not valid')
 
 
         dist = distance(
@@ -116,9 +115,9 @@ class MoveToMapPokemon(BaseTask):
 
         # update map when 500m away from center and last update longer than 2 minutes away
         now = int(time.time())
-        if dist > 500 and now - self.last_map_update > 2 * 60:
+        if dist > 200 and now - self.last_map_update > 2 * 60:
             requests.post('{}/next_loc?lat={}&lon={}'.format(self.config['address'], self.bot.position[0], self.bot.position[1]))
-            logger.log('Updated PokemonGo-Map position')
+            self.logger.info('Updated PokemonGo-Map position')
             self.last_map_update = now
 
     def snipe(self, pokemon):
@@ -126,17 +125,17 @@ class MoveToMapPokemon(BaseTask):
 
         self.bot.heartbeat()
 
-        logger.log('Teleporting to {} ({})'.format(pokemon['name'], format_dist(pokemon['dist'], self.unit)), 'green')
+        self.logger.info('Teleporting to {} ({})'.format(pokemon['name'], format_dist(pokemon['dist'], self.unit)))
         self.bot.api.set_position(pokemon['latitude'], pokemon['longitude'], 0)
 
-        logger.log('Encounter pokemon', 'green')
+        self.logger.info('Encounter pokemon')
         catch_worker = PokemonCatchWorker(pokemon, self.bot)
         api_encounter_response = catch_worker.create_encounter_api_call()
 
         time.sleep(2)
-        logger.log('Teleporting back to previous location..', 'green')
-        self.bot.api.set_position(last_position[0], last_position[1], 0)
-        time.sleep(2)
+        #self.logger.info('Teleporting back to previous location..')
+        #self.bot.api.set_position(last_position[0], last_position[1], 0)
+        #time.sleep(2)
         self.bot.heartbeat()
 
         catch_worker.work(api_encounter_response)
@@ -177,14 +176,21 @@ class MoveToMapPokemon(BaseTask):
         if (pokeballs + superballs) < 1 and not pokemon['is_vip']:
             return WorkerResult.SUCCESS
 
-        if self.config['snipe']:
+        if pokemon['is_vip'] or self.config['snipe']:
             return self.snipe(pokemon)
 
         now = int(time.time())
-        logger.log('Moving towards {}, {} left ({})'.format(pokemon['name'], format_dist(pokemon['dist'], self.unit), format_time(pokemon['disappear_time'] - now)))
+
+        # add speed (walk) for high priority pokemons
+        # pokemon['priority'] / 100
+        walking_speed = self.bot.config.walk + (pokemon['priority'] / 200) + (pokemon['priority'] > 600 and 8 or 0)
+
+        # add speed if time getting out
+        # pokemon['disappear_time'] < (now + self.config['min_time'])
+        self.logger.info('Moving towards {}, speed {}, {} left ({})'.format(pokemon['name'], walking_speed, format_dist(pokemon['dist'], self.unit), format_time(pokemon['disappear_time'] - now)))
         step_walker = StepWalker(
             self.bot,
-            self.bot.config.walk,
+            walking_speed,
             pokemon['latitude'],
             pokemon['longitude']
         )
@@ -192,6 +198,6 @@ class MoveToMapPokemon(BaseTask):
         if not step_walker.step():
             return WorkerResult.RUNNING
 
-        logger.log('Arrived at {}'.format(pokemon['name']))
+        self.logger.info('Arrived at {}'.format(pokemon['name']))
         self.add_caught(pokemon)
         return WorkerResult.SUCCESS

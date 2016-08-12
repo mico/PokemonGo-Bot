@@ -32,6 +32,8 @@ import logging
 import os
 import ssl
 import sys
+reload(sys)
+sys.setdefaultencoding('utf-8')
 import time
 from datetime import timedelta
 from getpass import getpass
@@ -122,12 +124,12 @@ def main():
 
     except GeocoderQuotaExceeded:
         raise Exception("Google Maps API key over requests limit.")
-    except Exception as e:
-        # always report session summary and then raise exception
-        if bot:
-            report_summary(bot)
-
-        raise e
+    # except Exception as e:
+    #     # always report session summary and then raise exception
+    #     if bot:
+    #         report_summary(bot)
+    #
+    #     raise e
 
 def report_summary(bot):
     if bot.metrics.start_time is None:
