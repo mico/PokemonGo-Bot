@@ -15,4 +15,4 @@ else
     fi
 fi
 
-python pokecli.py --config ${config}
+LD_LIBRARY_PATH='/Users/mico/Documents/Projects/PokemonGo-Bot' PYTHONIOENCODING=utf-8 python pokecli.py --config ${config}
